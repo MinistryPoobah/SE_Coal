@@ -1,0 +1,278 @@
+---
+title: "Biomonitoring-Exploratory"
+author: "Keith Story"
+date: "02/12/2020"
+output: 
+  html_document :
+  theme: united
+  highlight: espresso
+runtime: shiny
+---
+
+# Exploratory Plots for Biomonitoring Study
+The following plots show Enironmental Monitoring System (EMS) data for all of the monitoring sites under **Permit 107571**.
+
+``` {r, echo = FALSE, Warning = FALSE, include = FALSE}
+library(rems)
+library(tidyverse)
+library(lubridate)
+library(RColorBrewer)
+library(plotly)
+library(leaflet)
+library(knitr)
+library(pander)
+library(Kendall)
+library(trend)
+```
+
+Data were imported from the EMS database and filtered for Permit 107517, parameters of interest, and for samples collected after 2009.
+
+``` {r, echo = FALSE, warning = FALSE}
+  hist_db <- attach_historic_data()
+
+  filt_hist <- hist_db %>%
+    select(EMS_ID,
+           MONITORING_LOCATION,
+           LOCATION_TYPE,
+           LATITUDE,
+           LONGITUDE,
+           PERMIT,
+           PARAMETER,
+           COLLECTION_START,
+           RESULT,
+           UNIT)
+
+
+  filt_historic <- collect(filt_hist) %>%
+    filter(PERMIT == "107517",
+           PARAMETER %in% c("Sulfate Dissolved",
+                            "Nitrate (NO3) Dissolved",
+                            "Nickel Dissolved",
+                            "Selenium Total",
+                            "Selenium Dissolved",
+                            "Fish Bioassay(Pass/Fail)",
+                            "Bioassay(Pass/Fail):Daphnia Magna",
+                            "Uranium Dissolved",
+                            "Lithium Dissolved"
+                            )) %>%
+    mutate(COLLECTION_START = ems_posix_numeric(COLLECTION_START)) %>% #EMS uses non-standard date format. Change to standard format.
+    mutate(year = year(COLLECTION_START)) %>%
+    filter(year > "2009") %>%
+    mutate(SITE_FULL = paste(EMS_ID, MONITORING_LOCATION, sep =": "))
+
+
+# filt_historic$COLLECTION_START <- as.Date(format(as.Date(filt_historic$COLLECTION_START), format = "2000-%m-%d")) # Uncomment this code to view overlapping annual data by month rather than continous data by year.
+
+  filt_historic$year <- as.factor(filt_historic$year)
+```
+
+
+``` {r, echo = FALSE, message = FALSE, warning = FALSE}
+
+#_________________ Statistics
+
+# Stat function for MK
+
+MK.report <- function (x) {
+ 
+  MK_list <- list()
+  
+  for (i in unique(filt_historic$SITE_FULL)) {
+    
+    group_test <- filt_historic %>%
+      filter(PARAMETER == x, SITE_FULL == i) %>%
+      select(SITE_FULL, COLLECTION_START, RESULT) %>%
+      mutate(year = lubridate::year(COLLECTION_START),
+             month = lubridate::month(COLLECTION_START, label = TRUE)
+      ) %>%
+      group_by(SITE_FULL, year, month) %>%
+      summarize(mean_result = mean(RESULT), .groups = "drop")
+    
+    reference_df <- filt_historic %>%
+      filter(PARAMETER == x, SITE_FULL == i) %>%
+      select(COLLECTION_START)
+    # 
+    # error_check <- group_test %>% 
+    #   group_by(year) %>%
+    #   summarize(count = n())
+    
+    tryCatch({
+      # message(paste("\nRunning stats for: ", x, "\n", sep = ""))
+      TS <- ts(group_test$mean_result,
+               frequency = 12,
+               start = c(min(group_test$year), min(group_test$month)),
+               end = c(max(group_test$year), max(group_test$month))
+           )
+               
+      # TS_decomp <- plot(decompose(TS))
+      # TS_seasonal_decomp <- plot(stl(TS,s.window="periodic"))
+      
+      if (length(TS)/12 >= 3) {
+      
+        MK <- MannKendall(TS)
+        SMK <- SeasonalMannKendall(TS)
+        MK_tau_extract <- MK[1]
+        MK_p_extract <- MK[2]
+        SMK_tau_extract <- SMK[1]
+        SMK_p_extract <- SMK[2]
+        SS <- sens.slope(TS)
+        SS_extract <- SS[[1]]
+        
+        TS2 <- ts(group_test$mean_result,
+                  frequency = 12,
+                  start = c(min(group_test$year)+1, 1),
+                  end = c(max(group_test$year), 12))
+        
+        SSS <- sea.sens.slope(TS2)
+        SSS_extract <- SSS[[1]]
+        PT <- pettitt.test(TS)
+        PT_extract <- PT$estimate[1]
+        
+        change_date <- reference_df[PT_extract,1]
+        stat_table <- cbind(change_date, 
+                            SS_extract, 
+                            MK_tau_extract, 
+                            MK_p_extract, 
+                            SSS_extract, 
+                            SMK_tau_extract, 
+                            SMK_p_extract)
+        
+        colnames(stat_table) <- c("Date of Change", 
+                                   "Sen's Slope", 
+                                   "MK tau", 
+                                   "MK p-value", 
+                                   "Sen's Slope (Seasonal)", 
+                                   "MK tau (seasonal)", 
+                                   "MK p-value (seasonal)")
+        stat_table$`Date of Change` <- format(stat_table$`Date of Change`, "%Y-%m-%d")
+        
+        MK_list[[i]] <- stat_table
+      }
+      
+      }, error = function(cond) {
+        # message("******Not enough observations in this location.")
+        return(cond)
+      })
+    
+  }
+  stat_table_out <- as.data.frame(do.call(rbind, MK_list))
+  
+  stat_table_out <- stat_table_out %>%
+    mutate(Parameter = x) %>%
+    relocate(Parameter) 
+  
+  return(stat_table_out)
+}
+  
+```
+## EMS Locations
+
+``` {r, echo = FALSE}
+  simple_historic <- filt_historic %>%
+    select(EMS_ID, MONITORING_LOCATION, LOCATION_TYPE, LATITUDE, LONGITUDE) %>%
+    distinct()
+  
+  EMS_Locations <- leaflet(simple_historic) %>%
+    addTiles() %>%
+    addCircleMarkers(color = ~LOCATION_TYPE,
+                     fillOpacity = 0.6,
+                     lng = ~LONGITUDE, 
+                     lat = ~LATITUDE,
+                     label = ~as.character(paste(EMS_ID, MONITORING_LOCATION, sep = ":\n")),
+                     labelOptions = labelOptions(noHide = T)
+                     )
+  
+  EMS_Locations
+```
+
+## Shiny Work
+
+```{r, echo=FALSE}
+shinyApp(
+  
+  ui = fluidPage(
+    selectInput(inputId = "input_parameter",
+                label = "Enter Parameter: ",
+                choices = unique(filt_historic$PARAMETER)
+                ),
+    plotOutput("FacetPlots"),
+    tableOutput("MKtable")
+        ),
+                
+    
+    server = function(input, output) {
+      
+      output$FacetPlots = renderPlot({
+        
+        ggplot(data = subset(filt_historic, PARAMETER == input$input_parameter),
+               aes(x = COLLECTION_START, y = RESULT, colour = year)) +
+          geom_point(size = 1, alpha = 0.5) +
+          stat_smooth(method = "loess", se = FALSE) +
+          # geom_point(size = 0.3)+
+          # geom_path(aes(x = COLLECTION_START, y = RESULT, color = year)) +
+          labs(title = paste(input$input_parameter, "\n", sep = ""),
+               y = paste(filt_historic$UNIT, "\n", sep = ""),
+               x = "Year",
+               color = "Year") +
+          facet_wrap(. ~ SITE_FULL, 
+                     labeller = labeller(SITE_FULL = label_wrap_gen(width = 20,
+                                                                                   multi_line = TRUE))) +
+          # scale_x_date(date_labels = "%y") +
+          scale_color_brewer(palette = "RdYlBu") +
+          theme_bw() +
+          theme(axis.text.x = element_text(angle = 90),
+                plot.background = element_rect(fill = "snow"))
+      
+      })
+      
+      output$MKtable = renderTable({
+        req(input$input_parameter)
+        MK.report(input$input_parameter)
+        })
+    
+    }
+    
+    # options = list(height = 500)
+  )
+
+
+```
+
+
+
+
+<!-- ## Plots  -->
+<!-- ``` {r, echo = FALSE, message = FALSE, results = 'hide', warning = FALSE} -->
+<!--   filt_plots <- filt_historic %>% -->
+<!--     group_by(PARAMETER) %>% -->
+<!--     do(plots = -->
+<!--          ggplot(data = ., aes(x = COLLECTION_START, y = RESULT, colour = year)) + -->
+<!--          geom_point(size = 1, alpha = 0.5) + -->
+<!--          stat_smooth(method = "loess", se = FALSE) + -->
+<!--          # geom_point(size = 0.3)+ -->
+<!--          # geom_path(aes(x = COLLECTION_START, y = RESULT, color = year)) + -->
+<!--          labs(title = paste(.$PARAMETER, "\n", sep = ""), -->
+<!--               y = paste(.$UNIT, "\n", sep = ""), -->
+<!--               x = "Year", -->
+<!--               color = "Year") + -->
+<!--          facet_wrap(. ~ SITE_FULL, labeller = labeller(SITE_FULL = label_wrap_gen(width = 20, multi_line = TRUE))) + -->
+<!--          # scale_x_date(date_labels = "%y") + -->
+<!--          scale_color_brewer(palette = "RdYlBu") + -->
+<!--          theme_bw() + -->
+<!--          theme(axis.text.x = element_text(angle = 90), -->
+<!--                plot.background = element_rect(fill = "snow")) -->
+<!--         ) -->
+
+<!--   # filt_plots$plots[1:3] -->
+
+<!-- # for (i in 1:length(filt_plots$plots)) { -->
+<!-- #   print(filt_plots$PARAMETER[i]) -->
+<!-- #   filt_plots$plots[i] -->
+<!-- #   } -->
+
+
+<!--   filt_plots$plots[1:length(filt_plots$plots)] -->
+
+
+<!-- ``` -->
+
