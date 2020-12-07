@@ -23,6 +23,7 @@ library(knitr)
 library(pander)
 library(Kendall)
 library(trend)
+library(formattable)
 ```
 
 Data were imported from the EMS database and filtered for Permit 107517, parameters of interest, and for samples collected after 2009.
@@ -59,11 +60,22 @@ Data were imported from the EMS database and filtered for Permit 107517, paramet
     mutate(year = year(COLLECTION_START)) %>%
     filter(year > "2009") %>%
     mutate(SITE_FULL = paste(EMS_ID, MONITORING_LOCATION, sep =": "))
+  
+  simple_historic <- filt_historic %>%
+    select(EMS_ID, MONITORING_LOCATION, LOCATION_TYPE, LATITUDE, LONGITUDE) %>%
+    distinct()
 
 
 # filt_historic$COLLECTION_START <- as.Date(format(as.Date(filt_historic$COLLECTION_START), format = "2000-%m-%d")) # Uncomment this code to view overlapping annual data by month rather than continous data by year.
 
   filt_historic$year <- as.factor(filt_historic$year)
+  
+  
+  customGreen0 <- "#DeF7E9"
+
+  customGreen <- "#71CA97"
+
+  customRed <- "#ff7f7f"
 ```
 
 
@@ -165,42 +177,45 @@ MK.report <- function (x) {
 }
   
 ```
-## EMS Locations
 
-``` {r, echo = FALSE}
-  simple_historic <- filt_historic %>%
-    select(EMS_ID, MONITORING_LOCATION, LOCATION_TYPE, LATITUDE, LONGITUDE) %>%
-    distinct()
-  
-  EMS_Locations <- leaflet(simple_historic) %>%
-    addTiles() %>%
-    addCircleMarkers(color = ~LOCATION_TYPE,
-                     fillOpacity = 0.6,
-                     lng = ~LONGITUDE, 
-                     lat = ~LATITUDE,
-                     label = ~as.character(paste(EMS_ID, MONITORING_LOCATION, sep = ":\n")),
-                     labelOptions = labelOptions(noHide = T)
-                     )
-  
-  EMS_Locations
-```
-
-## Shiny Work
 
 ```{r, echo=FALSE}
 shinyApp(
   
   ui = fluidPage(
-    selectInput(inputId = "input_parameter",
-                label = "Enter Parameter: ",
-                choices = unique(filt_historic$PARAMETER)
-                ),
-    plotOutput("FacetPlots"),
-    tableOutput("MKtable")
-        ),
-                
+    
+    leafletOutput("ElkValley"),
+    
+    sidebarLayout(
+          sidebarPanel(
+            selectInput(inputId = "input_parameter",
+                     label = "Enter Parameter: ",
+                     choices = unique(filt_historic$PARAMETER))
+          ),
+    
+          mainPanel(
+            tabsetPanel(tabPanel("Plots", plotOutput("FacetPlots")),
+                        tabPanel("Statistics", formattableOutput("MKtable"))
+                     ),
+                  )
+                )
+    ),
+           
     
     server = function(input, output) {
+      
+        output$ElkValley <- renderLeaflet({
+          
+            leaflet(simple_historic) %>%
+              addTiles() %>%
+              addCircleMarkers(color = ~LOCATION_TYPE,
+                               fillOpacity = 0.6,
+                               lng = ~LONGITUDE, 
+                               lat = ~LATITUDE,
+                               label = ~as.character(paste(EMS_ID, MONITORING_LOCATION, sep = ":\n")),
+                               labelOptions = labelOptions(noHide = T)
+                               )
+        })
       
       output$FacetPlots = renderPlot({
         
@@ -225,9 +240,17 @@ shinyApp(
       
       })
       
-      output$MKtable = renderTable({
+      output$MKtable = renderFormattable({
         req(input$input_parameter)
-        MK.report(input$input_parameter)
+        formattable(MK.report(input$input_parameter), list(
+                             `MK p-value` = formatter("span",
+                                                      style = x ~ style(color = ifelse(x < 0.05, "green", "grey"))),
+                             `MK p-value (seasonal)` = formatter("span",
+                                                      style = x ~ style(color = ifelse(x < 0.05, "green", "grey"))),
+                             `Sen's Slope` = color_tile(customGreen0, customGreen)
+                          )
+                    
+                    )
         })
     
     }
