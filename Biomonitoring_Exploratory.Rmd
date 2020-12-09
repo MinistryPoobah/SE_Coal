@@ -158,6 +158,10 @@ MK.report <- function (x) {
                                    "MK p-value (seasonal)")
         stat_table$`Date of Change` <- format(stat_table$`Date of Change`, "%Y-%m-%d")
         
+        stat_table <- stat_table %>%
+          mutate("EMS Location" = i) %>%
+          relocate(`EMS Location`)
+        
         MK_list[[i]] <- stat_table
       }
       
@@ -178,27 +182,63 @@ MK.report <- function (x) {
   
 ```
 
+### Map of Teck Mining Operations in the Elk Valley
+```{r, echo = FALSE}
 
+shinyApp(
+  ui = fluidPage(
+
+    leafletOutput("ElkValley")
+    
+  ),
+  
+  server = function(input, output) {
+      
+    output$ElkValley <- renderLeaflet({
+          
+            leaflet(simple_historic) %>%
+              addTiles() %>%
+              addCircleMarkers(color = ~LOCATION_TYPE,
+                               fillOpacity = 0.6,
+                               lng = ~LONGITUDE, 
+                               lat = ~LATITUDE,
+                               label = ~as.character(paste(EMS_ID, MONITORING_LOCATION, sep = ":\n")),
+                               labelOptions = labelOptions(noHide = T)
+                               )
+        })
+  }
+  
+)
+  
+  
+
+```
+
+### EMS Data and Mann-Kendall Statistics for Parameters of Concern
 ```{r, echo=FALSE}
 shinyApp(
   
   ui = fluidPage(
+    tags$head(
+      tags$style(
+        HTML('.shiny-split-layout>div {overflow-y: hidden;}'))
+    ),
     
-    leafletOutput("ElkValley"),
+    # leafletOutput("ElkValley"),
     
-    sidebarLayout(
-          sidebarPanel(
-            selectInput(inputId = "input_parameter",
+    fluidRow(
+      column(6, 
+             selectInput(inputId = "input_parameter",
                      label = "Enter Parameter: ",
-                     choices = unique(filt_historic$PARAMETER))
-          ),
+                     choices = unique(filt_historic$PARAMETER)))
+    ),
     
-          mainPanel(
-            tabsetPanel(tabPanel("Plots", plotOutput("FacetPlots")),
-                        tabPanel("Statistics", formattableOutput("MKtable"))
-                     ),
-                  )
-                )
+    mainPanel(
+        tabsetPanel(tabPanel("Plots", plotOutput("FacetPlots")),
+                    tabPanel("Statistics", formattableOutput("MKtable"))
+                     )
+              )
+    
     ),
            
     
@@ -236,7 +276,8 @@ shinyApp(
           scale_color_brewer(palette = "RdYlBu") +
           theme_bw() +
           theme(axis.text.x = element_text(angle = 90),
-                plot.background = element_rect(fill = "snow"))
+                plot.background = element_rect(fill = "snow"),
+                panel.background = element_rect(fill = "grey86"))
       
       })
       
@@ -247,7 +288,10 @@ shinyApp(
                                                       style = x ~ style(color = ifelse(x < 0.05, "green", "grey"))),
                              `MK p-value (seasonal)` = formatter("span",
                                                       style = x ~ style(color = ifelse(x < 0.05, "green", "grey"))),
-                             `Sen's Slope` = color_tile(customGreen0, customGreen)
+                             `Sen's Slope` = formatter("span",
+                                                      style = x ~ style(color = ifelse(x < 0, "green", "red"))),
+                             `Sen's Slope (seasonal)` = formatter("span",
+                                                      style = x ~ style(color = ifelse(x < 0, "green", "red")))
                           )
                     
                     )
@@ -261,6 +305,14 @@ shinyApp(
 
 ```
 
+Test text for `r renderUI({input$input_parameter})`
+``` {r, echo = FALSE}
+
+renderUI({
+  HTML(input$input_parameter)
+})
+
+```
 
 
 
